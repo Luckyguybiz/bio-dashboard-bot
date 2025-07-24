@@ -1,6 +1,5 @@
 import os
 import time
-from autogen import Agent, Step
 from autogen.integrations.github import GitHubAPI
 from autogen.integrations.railway import RailwayAPI
 from autogen.integrations.telegram import TelegramAPI

@@ -1,14 +1,13 @@
 import os
 import asyncio
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 
-# Получаем токен Telegram из переменной окружения
 TG_TOKEN = os.getenv("TG_TOKEN")
 
 bot = Bot(token=TG_TOKEN)
 dp = Dispatcher()
 
-@dp.message(commands=["start"])
+@dp.message(F.text == "/start")
 async def start_handler(message: types.Message):
     await message.reply("Бот успешно запущен! 🚀")
 

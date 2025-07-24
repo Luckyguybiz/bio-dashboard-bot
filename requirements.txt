@@ -4,6 +4,5 @@ aiohttp==3.8.4
 apscheduler==3.9.1
 python-dotenv==1.0.0
 PyGithub==1.55
-railway-python-client==1.0.0  # гипотетическая библиотека для Railway API
 openai==0.27.0
 autogen==0.1.0             # фреймворк-оркестратор агентов

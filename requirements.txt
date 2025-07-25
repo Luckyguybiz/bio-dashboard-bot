@@ -4,3 +4,4 @@ python-dotenv==1.0.0
 openai==0.27.0
 uvicorn==0.29.0
 fastapi==0.103.2
+aiohttp==3.9.5

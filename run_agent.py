@@ -25,17 +25,51 @@ dp = Dispatcher()
 app = FastAPI()
 scheduler = AsyncIOScheduler(timezone="UTC")
 
-# Reply‑keyboard с основными командами
+# Reply‑keyboard с основными командами (с эмодзи)
 kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="/dailyreport")],
-        [KeyboardButton(text="/morningcheckin")],
-        [KeyboardButton(text="/goals")],
-        [KeyboardButton(text="/mynotes")],
+        [
+            KeyboardButton(text="/dailyreport 📊"),
+            KeyboardButton(text="/morningcheckin 🌅"),
+        ],
+        [
+            KeyboardButton(text="/goals 🎯"),
+            KeyboardButton(text="/mynotes 📝"),
+        ],
     ],
     resize_keyboard=True,
     one_time_keyboard=False,
 )
+
+STARTED_USERS_FILE = os.getenv("STARTED_USERS_FILE", "started_users.json")
+STARTED_USERS: set[int] = set()
+
+
+def load_started_users() -> set[int]:
+    if not STARTED_USERS and os.path.exists(STARTED_USERS_FILE):
+        try:
+            with open(STARTED_USERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    STARTED_USERS.update(data)
+        except Exception:
+            pass
+    return STARTED_USERS
+
+
+def add_started_user(user_id: int) -> None:
+    users = load_started_users()
+    if user_id not in users:
+        users.add(user_id)
+        try:
+            with open(STARTED_USERS_FILE, "w", encoding="utf-8") as f:
+                json.dump(sorted(users), f, ensure_ascii=False)
+        except Exception as e:
+            print("Failed to save started users:", e)
+
+
+# Инициализируем список пользователей, запустивших бота
+load_started_users()
 
 
 def _read_whoop_lines() -> list[dict]:
@@ -138,11 +172,25 @@ def log_habit_completion(user_id: int, habit: str) -> None:
 
 @dp.message(F.text == "/start")
 async def start_handler(message: types.Message):
-    await message.answer(
-        "Привет! Я помогу тебе следить за здоровьем.\n\n"
-        "Выбирай команды ниже или вводи вручную:",
-        reply_markup=kb
-    )
+    user_id = message.from_user.id
+    first_time = user_id not in load_started_users()
+    if first_time:
+        add_started_user(user_id)
+        intro = (
+            "✅ <b>Добро пожаловать!</b>\n"
+            "Я помогу следить за здоровьем и привычками.\n\n"
+            "<b>Основные команды:</b>\n"
+            "• /dailyreport — свежая статистика WHOOP\n"
+            "• /morningcheckin — как ты себя чувствуешь?\n"
+            "• /goals — цели на день\n"
+            "• /mynotes <i>текст</i> — личные заметки"
+        )
+        await message.answer(intro, reply_markup=kb, parse_mode="HTML")
+        await message.answer(
+            "Чтобы начать, попробуй /morningcheckin или получи /dailyreport!"
+        )
+    else:
+        await message.answer("С возвращением! Выбирай команды ниже:", reply_markup=kb)
 
 
 @dp.message(Command("dailyreport"))
@@ -159,8 +207,11 @@ async def dailyreport_handler(message: types.Message):
 
     report = [
         f"Вы спали {sleep} часов." if sleep is not None else "Данных о сне нет.",
-        f"Восстановление {recovery}% и нагрузка {strain}." if recovery is not None and strain is not None
-            else "Нет данных о восстановлении или нагрузке.",
+        (
+            f"Восстановление {recovery}% и нагрузка {strain}."
+            if recovery is not None and strain is not None
+            else "Нет данных о восстановлении или нагрузке."
+        ),
         f"Сегодня {steps} шагов." if steps is not None else "Данных о шагах нет.",
         "Совет: прислушивайтесь к самочувствию и отдыхайте при необходимости.",
     ]
@@ -192,20 +243,20 @@ async def morningcheckin_callback(call: types.CallbackQuery):
 async def goals_handler(message: types.Message):
     await message.answer(
         "Установи свои цели на сегодня:\n"
-        "- Шаги\n"
-        "- Сон\n"
-        "- Восстановление"
+        "• Шаги\n"
+        "• Сон\n"
+        "• Восстановление"
     )
 
 
 @dp.message(Command("mynotes"))
 async def notes_handler(message: types.Message):
     text = message.text or ""
-    note = text[len("/mynotes"):].strip()
-    if not note:
+    note = text[len("/mynotes") :].strip()
+    if not note or note == "📝":
         await message.answer(
-            "Напиши заметку после команды, например:\n"
-            "`/mynotes Купил продукты`"
+            "Напиши заметку после команды, например:\n" "`/mynotes Купил продукты`",
+            parse_mode="Markdown",
         )
         return
     # TODO: сохранить заметку в файл или БД
@@ -257,7 +308,10 @@ async def ask_handler(message: types.Message):
             lambda: openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a helpful health assistant."},
+                    {
+                        "role": "system",
+                        "content": "You are a helpful health assistant.",
+                    },
                     {"role": "user", "content": question},
                 ],
             ),
@@ -317,7 +371,11 @@ async def send_daily_whoop_summary():
     ]
     report = [
         f"Сон: {sleep} ч." if sleep is not None else "Данных о сне нет.",
-        f"Восстановление {recovery}%" if recovery is not None else "Нет данных о восстановлении.",
+        (
+            f"Восстановление {recovery}%"
+            if recovery is not None
+            else "Нет данных о восстановлении."
+        ),
         f"Нагрузка {strain}" if strain is not None else "Нет данных о нагрузке.",
         f"HRV {hrv}" if hrv is not None else "Нет данных HRV.",
         f"Шаги {steps}" if steps is not None else "Нет данных о шагах.",
@@ -366,15 +424,25 @@ async def send_weekly_report():
         await bot.send_message(USER_CHAT_ID, "Нет данных WHOOP за неделю.")
         return
     sleep = _average([d.get("sleep") for d in data7 if d.get("sleep") is not None])
-    recovery = _average([d.get("recovery") for d in data7 if d.get("recovery") is not None])
+    recovery = _average(
+        [d.get("recovery") for d in data7 if d.get("recovery") is not None]
+    )
     strain = _average([d.get("strain") for d in data7 if d.get("strain") is not None])
     hrv = _average([d.get("hrv") for d in data7 if d.get("hrv") is not None])
     steps = _average([d.get("steps") for d in data7 if d.get("steps") is not None])
     report = [
         "Недельный отчёт WHOOP:",
-        f"Средний сон: {sleep:.1f} ч." if sleep is not None else "- сон: нет данных", 
-        f"Среднее восстановление: {recovery:.0f}%" if recovery is not None else "- восстановление: нет данных",
-        f"Средняя нагрузка: {strain:.1f}" if strain is not None else "- нагрузка: нет данных",
+        f"Средний сон: {sleep:.1f} ч." if sleep is not None else "- сон: нет данных",
+        (
+            f"Среднее восстановление: {recovery:.0f}%"
+            if recovery is not None
+            else "- восстановление: нет данных"
+        ),
+        (
+            f"Средняя нагрузка: {strain:.1f}"
+            if strain is not None
+            else "- нагрузка: нет данных"
+        ),
         f"Средний HRV: {hrv:.1f}" if hrv is not None else "- HRV: нет данных",
         f"Средние шаги: {steps:.0f}" if steps is not None else "- шаги: нет данных",
     ]

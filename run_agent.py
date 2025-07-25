@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from fastapi import FastAPI, Request
@@ -9,6 +10,7 @@ import uvicorn
 TG_TOKEN = os.getenv("TG_TOKEN")
 USER_CHAT_ID = os.getenv("USER_CHAT_ID")
 WHOOP_DATA_FILE = os.getenv("WHOOP_DATA_FILE", "whoop_data.json")
+MORNING_CHECKIN_FILE = os.getenv("MORNING_CHECKIN_FILE", "morning_checkins.json")
 
 bot = Bot(token=TG_TOKEN)
 dp = Dispatcher()
@@ -27,6 +29,20 @@ def load_latest_whoop_data() -> dict | None:
     except Exception as e:
         print("Failed to read WHOOP data:", e)
         return None
+
+def save_morning_checkin(user_id: int, response: str) -> None:
+    """Append a morning check-in entry to MORNING_CHECKIN_FILE."""
+    data = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "user_id": user_id,
+        "response": response,
+    }
+    try:
+        with open(MORNING_CHECKIN_FILE, "a", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.write("\n")
+    except Exception as e:
+        print("Failed to save morning check-in:", e)
 
 @dp.message(F.text == "/start")
 async def start_handler(message: types.Message):
@@ -57,6 +73,31 @@ async def dailyreport_handler(message: types.Message):
     lines.append("Совет: прислушивайтесь к самочувствию и отдыхайте при необходимости.")
 
     await message.reply("\n".join(lines))
+
+
+@dp.message(Command("morningcheckin"))
+async def morningcheckin_handler(message: types.Message):
+    keyboard = types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [types.InlineKeyboardButton(text="Good 😊", callback_data="mc_good")],
+            [types.InlineKeyboardButton(text="Okay 😐", callback_data="mc_okay")],
+            [types.InlineKeyboardButton(text="Bad 😔", callback_data="mc_bad")],
+        ]
+    )
+    await message.reply("How do you feel today?", reply_markup=keyboard)
+
+
+@dp.callback_query(F.data.in_("mc_good", "mc_okay", "mc_bad"))
+async def morningcheckin_callback(call: types.CallbackQuery):
+    mapping = {
+        "mc_good": "Good",
+        "mc_okay": "Okay",
+        "mc_bad": "Bad",
+    }
+    response = mapping.get(call.data, call.data)
+    save_morning_checkin(call.from_user.id, response)
+    await call.message.answer("Спасибо! Ваш ответ сохранен.")
+    await call.answer()
 
 @dp.message()
 async def echo_handler(message: types.Message):

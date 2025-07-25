@@ -18,7 +18,7 @@ bot = Bot(token=TG_TOKEN)
 dp = Dispatcher()
 app = FastAPI()
 
-# Reply keyboard with main commands
+# Reply‑keyboard с основными командами
 kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="/dailyreport")],
@@ -32,12 +32,11 @@ kb = ReplyKeyboardMarkup(
 
 
 def load_latest_whoop_data() -> dict | None:
-    """Return the most recent WHOOP metrics from WHOOP_DATA_FILE."""
     if not os.path.exists(WHOOP_DATA_FILE):
         return None
     try:
         with open(WHOOP_DATA_FILE, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f if line.strip()]
+            lines = [line for line in f if line.strip()]
         if not lines:
             return None
         return json.loads(lines[-1])
@@ -47,15 +46,14 @@ def load_latest_whoop_data() -> dict | None:
 
 
 def save_morning_checkin(user_id: int, response: str) -> None:
-    """Append a morning check-in entry to MORNING_CHECKIN_FILE."""
-    data = {
+    entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "user_id": user_id,
         "response": response,
     }
     try:
         with open(MORNING_CHECKIN_FILE, "a", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+            json.dump(entry, f, ensure_ascii=False)
             f.write("\n")
     except Exception as e:
         print("Failed to save morning check-in:", e)
@@ -65,14 +63,13 @@ def save_morning_checkin(user_id: int, response: str) -> None:
 async def start_handler(message: types.Message):
     await message.answer(
         "Привет! Я помогу тебе следить за здоровьем.\n\n"
-        "Выбери команду кнопкой или введи вручную:",
-        reply_markup=kb,
+        "Выбирай команды ниже или вводи вручную:",
+        reply_markup=kb
     )
 
 
 @dp.message(Command("dailyreport"))
 async def dailyreport_handler(message: types.Message):
-    """Send a summary of the latest WHOOP metrics."""
     data = load_latest_whoop_data()
     if not data:
         await message.answer("Нет данных WHOOP для отчёта.")
@@ -83,17 +80,14 @@ async def dailyreport_handler(message: types.Message):
     strain = data.get("strain")
     steps = data.get("steps")
 
-    lines = [
+    report = [
         f"Вы спали {sleep} часов." if sleep is not None else "Данных о сне нет.",
-        (
-            f"Восстановление {recovery}% и нагрузка {strain}."
-            if recovery is not None and strain is not None
-            else "Нет данных о восстановлении или нагрузке."
-        ),
+        f"Восстановление {recovery}% и нагрузка {strain}." if recovery is not None and strain is not None
+            else "Нет данных о восстановлении или нагрузке.",
         f"Сегодня {steps} шагов." if steps is not None else "Данных о шагах нет.",
         "Совет: прислушивайтесь к самочувствию и отдыхайте при необходимости.",
     ]
-    await message.answer("\n".join(lines))
+    await message.answer("\n".join(report))
 
 
 @dp.message(Command("morningcheckin"))
@@ -108,7 +102,7 @@ async def morningcheckin_handler(message: types.Message):
     await message.answer("Как ты себя чувствуешь сегодня?", reply_markup=keyboard)
 
 
-@dp.callback_query(F.data.in_("mc_good", "mc_okay", "mc_bad"))
+@dp.callback_query(F.data.in_(["mc_good", "mc_okay", "mc_bad"]))
 async def morningcheckin_callback(call: types.CallbackQuery):
     mapping = {"mc_good": "Good", "mc_okay": "Okay", "mc_bad": "Bad"}
     response = mapping.get(call.data, call.data)
@@ -120,31 +114,36 @@ async def morningcheckin_callback(call: types.CallbackQuery):
 @dp.message(Command("goals"))
 async def goals_handler(message: types.Message):
     await message.answer(
-        "Установи цели на сегодня:\n"
-        "- Шаги\n- Сон\n- Восстановление"
+        "Установи свои цели на сегодня:\n"
+        "- Шаги\n"
+        "- Сон\n"
+        "- Восстановление"
     )
 
 
-@dp.message(lambda m: m.text and m.text.startswith("/mynotes"))
+@dp.message(Command("mynotes"))
 async def notes_handler(message: types.Message):
-    note = message.text[len("/mynotes"):].strip()
+    text = message.text or ""
+    note = text[len("/mynotes"):].strip()
     if not note:
         await message.answer(
-            "Напиши заметку после команды, например: `/mynotes Купить продукты`"
+            "Напиши заметку после команды, например:\n"
+            "`/mynotes Купил продукты`"
         )
         return
-    # You can save the note to a file here if needed
+    # TODO: сохранить заметку в файл или БД
     await message.answer("Заметка сохранена ✅")
 
 
 @dp.message()
 async def fallback_handler(message: types.Message):
-    await message.answer("Выбери команду кнопкой или введи вручную.")
+    await message.answer("Используй кнопки ниже или введи команду вручную.")
 
 
 @app.post("/whoop-webhook")
 async def whoop_webhook(request: Request):
     data = await request.json()
+    # Сохраняем WHOOP-данные
     try:
         with open(WHOOP_DATA_FILE, "a", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
@@ -152,11 +151,13 @@ async def whoop_webhook(request: Request):
     except Exception as e:
         print("Failed to save WHOOP data:", e)
 
+    # Нотификация в Telegram
     if USER_CHAT_ID:
         try:
             await bot.send_message(USER_CHAT_ID, f"Получены данные от WHOOP: {data}")
         except Exception as e:
             print("Failed to send Telegram notification:", e)
+
     return {"ok": True}
 
 

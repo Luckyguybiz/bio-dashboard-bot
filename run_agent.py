@@ -2,6 +2,7 @@ import os
 import asyncio
 import json
 from datetime import datetime, timezone
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
@@ -17,7 +18,7 @@ bot = Bot(token=TG_TOKEN)
 dp = Dispatcher()
 app = FastAPI()
 
-# Клавиатура с командами
+# Reply keyboard with main commands
 kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="/dailyreport")],
@@ -26,8 +27,9 @@ kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="/mynotes")],
     ],
     resize_keyboard=True,
-    one_time_keyboard=False
+    one_time_keyboard=False,
 )
+
 
 def load_latest_whoop_data() -> dict | None:
     """Return the most recent WHOOP metrics from WHOOP_DATA_FILE."""
@@ -43,6 +45,7 @@ def load_latest_whoop_data() -> dict | None:
         print("Failed to read WHOOP data:", e)
         return None
 
+
 def save_morning_checkin(user_id: int, response: str) -> None:
     """Append a morning check-in entry to MORNING_CHECKIN_FILE."""
     data = {
@@ -57,35 +60,41 @@ def save_morning_checkin(user_id: int, response: str) -> None:
     except Exception as e:
         print("Failed to save morning check-in:", e)
 
+
 @dp.message(F.text == "/start")
 async def start_handler(message: types.Message):
     await message.answer(
         "Привет! Я помогу тебе следить за здоровьем.\n\n"
-        "Выбирай команды ниже или вводи вручную:",
-        reply_markup=kb
+        "Выбери команду кнопкой или введи вручную:",
+        reply_markup=kb,
     )
+
 
 @dp.message(Command("dailyreport"))
 async def dailyreport_handler(message: types.Message):
     """Send a summary of the latest WHOOP metrics."""
     data = load_latest_whoop_data()
     if not data:
-        return await message.answer("Нет данных WHOOP для отчёта.")
+        await message.answer("Нет данных WHOOP для отчёта.")
+        return
+
     sleep = data.get("sleep")
     recovery = data.get("recovery")
     strain = data.get("strain")
     steps = data.get("steps")
 
-    lines = []
-    lines.append(f"Вы спали {sleep} часов." if sleep is not None else "Данных о сне нет.")
-    lines.append(
-        f"Восстановление {recovery}% и нагрузка {strain}."
-        if recovery is not None and strain is not None
-        else "Нет данных о восстановлении или нагрузке."
-    )
-    lines.append(f"Сегодня {steps} шагов." if steps is not None else "Данных о шагах нет.")
-    lines.append("Совет: прислушивайтесь к самочувствию и отдыхайте при необходимости.")
+    lines = [
+        f"Вы спали {sleep} часов." if sleep is not None else "Данных о сне нет.",
+        (
+            f"Восстановление {recovery}% и нагрузка {strain}."
+            if recovery is not None and strain is not None
+            else "Нет данных о восстановлении или нагрузке."
+        ),
+        f"Сегодня {steps} шагов." if steps is not None else "Данных о шагах нет.",
+        "Совет: прислушивайтесь к самочувствию и отдыхайте при необходимости.",
+    ]
     await message.answer("\n".join(lines))
+
 
 @dp.message(Command("morningcheckin"))
 async def morningcheckin_handler(message: types.Message):
@@ -98,6 +107,7 @@ async def morningcheckin_handler(message: types.Message):
     )
     await message.answer("Как ты себя чувствуешь сегодня?", reply_markup=keyboard)
 
+
 @dp.callback_query(F.data.in_("mc_good", "mc_okay", "mc_bad"))
 async def morningcheckin_callback(call: types.CallbackQuery):
     mapping = {"mc_good": "Good", "mc_okay": "Okay", "mc_bad": "Bad"}
@@ -106,36 +116,42 @@ async def morningcheckin_callback(call: types.CallbackQuery):
     await call.message.answer("Спасибо! Ваш ответ сохранён.")
     await call.answer()
 
+
 @dp.message(Command("goals"))
 async def goals_handler(message: types.Message):
     await message.answer(
-        "Установи свои цели на сегодня:\n"
+        "Установи цели на сегодня:\n"
         "- Шаги\n- Сон\n- Восстановление"
     )
+
 
 @dp.message(lambda m: m.text and m.text.startswith("/mynotes"))
 async def notes_handler(message: types.Message):
     note = message.text[len("/mynotes"):].strip()
     if not note:
-        return await message.answer("Напиши заметку после команды, например: `/mynotes Купил продукты`")
-    # здесь можно сохранить заметку в файл или БД
+        await message.answer(
+            "Напиши заметку после команды, например: `/mynotes Купить продукты`"
+        )
+        return
+    # You can save the note to a file here if needed
     await message.answer("Заметка сохранена ✅")
+
 
 @dp.message()
 async def fallback_handler(message: types.Message):
-    await message.answer("Используй кнопки внизу или введи команду.")
+    await message.answer("Выбери команду кнопкой или введи вручную.")
+
 
 @app.post("/whoop-webhook")
 async def whoop_webhook(request: Request):
     data = await request.json()
-    # Сохраняем WHOOP-данные
     try:
         with open(WHOOP_DATA_FILE, "a", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
             f.write("\n")
     except Exception as e:
         print("Failed to save WHOOP data:", e)
-    # Отправляем уведомление в Telegram
+
     if USER_CHAT_ID:
         try:
             await bot.send_message(USER_CHAT_ID, f"Получены данные от WHOOP: {data}")
@@ -143,12 +159,15 @@ async def whoop_webhook(request: Request):
             print("Failed to send Telegram notification:", e)
     return {"ok": True}
 
+
 async def start_bot():
     await dp.start_polling(bot)
 
+
 @app.on_event("startup")
-async def on_startup():
+async def on_startup() -> None:
     asyncio.create_task(start_bot())
+
 
 if __name__ == "__main__":
     uvicorn.run("run_agent:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)))

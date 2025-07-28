@@ -19,30 +19,95 @@ MORNING_CHECKIN_FILE = os.getenv("MORNING_CHECKIN_FILE", "morning_checkins.json"
 HABITS_FILE = os.getenv("HABITS_FILE", "habits.json")
 HABIT_LOG_FILE = os.getenv("HABIT_LOG_FILE", "habit_log.json")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+NOTES_FILE = os.getenv("NOTES_FILE", "notes.json")
+LANGUAGE_FILE = os.getenv("LANGUAGE_FILE", "user_langs.json")
 
 bot = Bot(token=TG_TOKEN)
 dp = Dispatcher()
 app = FastAPI()
 scheduler = AsyncIOScheduler(timezone="UTC")
 
-# Reply‑keyboard с основными командами (с эмодзи)
-kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [
-            KeyboardButton(text="/dailyreport 📊"),
-            KeyboardButton(text="/morningcheckin 🌅"),
-        ],
-        [
-            KeyboardButton(text="/goals 🎯"),
-            KeyboardButton(text="/mynotes 📝"),
-        ],
-    ],
-    resize_keyboard=True,
-    one_time_keyboard=False,
-)
-
 STARTED_USERS_FILE = os.getenv("STARTED_USERS_FILE", "started_users.json")
 STARTED_USERS: set[int] = set()
+USER_LANGS: dict[str, str] = {}
+
+
+def load_languages() -> dict:
+    if os.path.exists(LANGUAGE_FILE):
+        try:
+            with open(LANGUAGE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {}
+
+
+def save_languages() -> None:
+    try:
+        with open(LANGUAGE_FILE, "w", encoding="utf-8") as f:
+            json.dump(USER_LANGS, f, ensure_ascii=False)
+    except Exception as e:
+        print("Failed to save languages:", e)
+
+
+def set_language(user_id: int, lang: str) -> None:
+    USER_LANGS[str(user_id)] = lang
+    save_languages()
+
+
+def get_language(user_id: int) -> str:
+    return USER_LANGS.get(str(user_id), "ru")
+
+
+def get_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    lang = get_language(user_id)
+    if lang == "ru":
+        keyboard = [
+            [
+                KeyboardButton(text="/dailyreport 📊 Отчёт"),
+                KeyboardButton(text="/morningcheckin 🌅 Настроение"),
+            ],
+            [
+                KeyboardButton(text="/goals 🎯 Цели"),
+                KeyboardButton(text="/mynotes 📝 Заметка"),
+            ],
+        ]
+    else:
+        keyboard = [
+            [
+                KeyboardButton(text="/dailyreport 📊"),
+                KeyboardButton(text="/morningcheckin 🌅"),
+            ],
+            [
+                KeyboardButton(text="/goals 🎯"),
+                KeyboardButton(text="/mynotes 📝"),
+            ],
+        ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=False)
+
+
+def get_intro_text(lang: str) -> str:
+    if lang == "en":
+        return (
+            "✅ Welcome!\n"
+            "I will help you track health and habits.\n\n"
+            "<b>Main commands:</b>\n"
+            "• /dailyreport — latest WHOOP stats\n"
+            "• /morningcheckin — how do you feel?\n"
+            "• /goals — set goals\n"
+            "• /mynotes <i>text</i> — personal notes"
+        )
+    return (
+        "✅ <b>Добро пожаловать!</b>\n"
+        "Я помогу следить за здоровьем и привычками.\n\n"
+        "<b>Основные команды:</b>\n"
+        "• /dailyreport — свежая статистика WHOOP\n"
+        "• /morningcheckin — как ты себя чувствуешь?\n"
+        "• /goals — цели на день\n"
+        "• /mynotes <i>текст</i> — личные заметки"
+    )
 
 
 def load_started_users() -> set[int]:
@@ -68,8 +133,9 @@ def add_started_user(user_id: int) -> None:
             print("Failed to save started users:", e)
 
 
-# Инициализируем список пользователей, запустивших бота
+# Инициализируем список пользователей, запустивших бота и языковые настройки
 load_started_users()
+USER_LANGS.update(load_languages())
 
 
 def _read_whoop_lines() -> list[dict]:
@@ -170,27 +236,79 @@ def log_habit_completion(user_id: int, habit: str) -> None:
         print("Failed to log habit completion:", e)
 
 
+def save_note(user_id: int, text: str) -> None:
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "user_id": user_id,
+        "text": text,
+    }
+    try:
+        with open(NOTES_FILE, "a", encoding="utf-8") as f:
+            json.dump(entry, f, ensure_ascii=False)
+            f.write("\n")
+    except Exception as e:
+        print("Failed to save note:", e)
+
+
+def load_notes(days: int) -> list[dict]:
+    if not os.path.exists(NOTES_FILE):
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    notes: list[dict] = []
+    try:
+        with open(NOTES_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                ts = entry.get("timestamp")
+                if not ts:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(ts)
+                    if dt >= cutoff:
+                        notes.append(entry)
+                except Exception:
+                    continue
+    except Exception as e:
+        print("Failed to load notes:", e)
+    return notes
+
+
 @dp.message(F.text == "/start")
 async def start_handler(message: types.Message):
     user_id = message.from_user.id
+    if str(user_id) not in USER_LANGS:
+        keyboard = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [types.InlineKeyboardButton(text="Русский", callback_data="lang_ru")],
+                [types.InlineKeyboardButton(text="English", callback_data="lang_en")],
+            ]
+        )
+        await message.answer("Выберите язык / Choose language:", reply_markup=keyboard)
+        return
+
     first_time = user_id not in load_started_users()
+    kb = get_keyboard(user_id)
+    lang = get_language(user_id)
     if first_time:
         add_started_user(user_id)
-        intro = (
-            "✅ <b>Добро пожаловать!</b>\n"
-            "Я помогу следить за здоровьем и привычками.\n\n"
-            "<b>Основные команды:</b>\n"
-            "• /dailyreport — свежая статистика WHOOP\n"
-            "• /morningcheckin — как ты себя чувствуешь?\n"
-            "• /goals — цели на день\n"
-            "• /mynotes <i>текст</i> — личные заметки"
-        )
-        await message.answer(intro, reply_markup=kb, parse_mode="HTML")
-        await message.answer(
-            "Чтобы начать, попробуй /morningcheckin или получи /dailyreport!"
-        )
+        await message.answer(get_intro_text(lang), reply_markup=kb, parse_mode="HTML")
+        if lang == "en":
+            await message.answer("Try /morningcheckin or get /dailyreport to begin!")
+        else:
+            await message.answer(
+                "Чтобы начать, попробуй /morningcheckin или получи /dailyreport!"
+            )
     else:
-        await message.answer("С возвращением! Выбирай команды ниже:", reply_markup=kb)
+        if lang == "en":
+            await message.answer("Welcome back! Choose a command:", reply_markup=kb)
+        else:
+            await message.answer("С возвращением! Выбирай команды ниже:", reply_markup=kb)
 
 
 @dp.message(Command("dailyreport"))
@@ -239,6 +357,16 @@ async def morningcheckin_callback(call: types.CallbackQuery):
     await call.answer()
 
 
+@dp.callback_query(F.data.in_(["lang_ru", "lang_en"]))
+async def language_callback(call: types.CallbackQuery):
+    lang = "ru" if call.data == "lang_ru" else "en"
+    set_language(call.from_user.id, lang)
+    add_started_user(call.from_user.id)
+    kb = get_keyboard(call.from_user.id)
+    await call.message.answer(get_intro_text(lang), reply_markup=kb, parse_mode="HTML")
+    await call.answer()
+
+
 @dp.message(Command("goals"))
 async def goals_handler(message: types.Message):
     await message.answer(
@@ -259,7 +387,7 @@ async def notes_handler(message: types.Message):
             parse_mode="Markdown",
         )
         return
-    # TODO: сохранить заметку в файл или БД
+    save_note(message.from_user.id, note)
     await message.answer("Заметка сохранена ✅")
 
 
@@ -412,6 +540,43 @@ async def smart_reminders():
         await bot.send_message(USER_CHAT_ID, msg)
 
 
+async def _summarize_notes(days: int, title: str):
+    if not USER_CHAT_ID:
+        return
+    notes = load_notes(days)
+    if not notes:
+        return
+    text = "\n".join(f"- {n.get('text','')}" for n in notes if n.get("text"))
+    openai.api_key = OPENAI_API_KEY
+    try:
+        resp = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Summarize the following notes in a short paragraph in the same language as the notes.",
+                    },
+                    {"role": "user", "content": text},
+                ],
+            ),
+        )
+        summary = resp["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print("GPT summary error:", e)
+        summary = "Не удалось получить сводку."
+    await bot.send_message(USER_CHAT_ID, f"{title}\n{summary}")
+
+
+async def send_daily_notes_summary():
+    await _summarize_notes(1, "Сводка дня:")
+
+
+async def send_weekly_notes_summary():
+    await _summarize_notes(7, "Сводка недели:")
+
+
 def _average(lst):
     return sum(lst) / len(lst) if lst else None
 
@@ -461,6 +626,8 @@ async def on_startup() -> None:
     scheduler.add_job(send_habit_reminder, "cron", hour=19, minute=0)
     scheduler.add_job(smart_reminders, "cron", hour=18, minute=0)
     scheduler.add_job(send_weekly_report, "cron", day_of_week="sun", hour=20, minute=0)
+    scheduler.add_job(send_daily_notes_summary, "cron", hour=21, minute=0)
+    scheduler.add_job(send_weekly_notes_summary, "cron", day_of_week="sun", hour=21, minute=5)
     scheduler.start()
     asyncio.create_task(start_bot())
 

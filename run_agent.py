@@ -2,7 +2,7 @@ import os
 import asyncio
 from typing import Set
 
-import openai
+from openai import OpenAI
 from aiogram import Bot, Dispatcher, types
 
 TG_TOKEN = os.getenv("TG_TOKEN")
@@ -14,9 +14,11 @@ if not TG_TOKEN or not DEST_CHANNEL_ID or not OPENAI_API_KEY:
 
 SOURCE_CHANNELS: Set[str] = {"chatgptv", "denissexy"}
 
+# import openai
+# openai.api_key = OPENAI_API_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 bot = Bot(TG_TOKEN)
 dp = Dispatcher()
-openai.api_key = OPENAI_API_KEY
 
 
 async def rewrite_text(text: str) -> str:
@@ -24,12 +26,12 @@ async def rewrite_text(text: str) -> str:
     prompt = f"Перепиши текст своими словами, сохрани смысл.\n\n{text}"
     response = await loop.run_in_executor(
         None,
-        lambda: openai.ChatCompletion.create(
+        lambda: client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
         ),
     )
-    return response["choices"][0]["message"]["content"].strip()
+    return response.choices[0].message.content.strip()
 
 
 @dp.channel_post()

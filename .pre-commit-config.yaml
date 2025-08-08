@@ -1,0 +1,20 @@
+exclude: ^(AGENTS.md|privacy_policy.md|run_agent.py|playbook.yaml|requirements.txt|runtime.txt|\.DS_Store)$
+repos:
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.11
+    hooks:
+      - id: ruff
+        args: ["--fix", "--ignore=I001,B008"]
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v2.7.1
+    hooks:
+      - id: prettier
+        types: [markdown]

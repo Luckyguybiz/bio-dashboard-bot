@@ -1,0 +1,41 @@
+version: '3.9'
+services:
+  api:
+    build: .
+    command: uvicorn scc.api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+  worker:
+    build: .
+    command: celery -A scc.workers.celery_app worker --loglevel=info
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+  beat:
+    build: .
+    command: celery -A scc.workers.celery_app beat --loglevel=info
+    env_file: .env
+    depends_on:
+      - redis
+      - postgres
+  redis:
+    image: redis:7-alpine
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: scc
+      POSTGRES_USER: scc
+      POSTGRES_PASSWORD: scc
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "scc"]
+      interval: 5s
+      retries: 5
+volumes:
+  pgdata:

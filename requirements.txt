@@ -1,3 +1,6 @@
-aiogram==3.4.1
-openai==0.27.0
-echo "openai>=1.40.0" >> requirements.txt
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+openai>=1.40.0
+python-telegram-bot>=21.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.1

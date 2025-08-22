@@ -1,99 +1,110 @@
-import os
-import re
-import tempfile
-import openai
+import os, re, tempfile
 import yt_dlp
+import openai
 from moviepy.editor import VideoFileClip
-from telegram import Update, InputFile
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 
-# Читаем токены из переменных окружения
-BOT_TOKEN = os.getenv("TG_TOKEN")              # ваш токен телеграм-бота
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")   # API-ключ OpenAI (Whisper)
+from telegram import Update, InputFile
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+)
+
+BOT_TOKEN = os.getenv("TG_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 openai.api_key = OPENAI_API_KEY
 
-# Регулярное выражение для поиска URL-ов на reels
 REEL_PATTERN = re.compile(r"https?://(?:www\\.)?instagram\\.com/reel/[\\w\\-]+/?")
 
+# телеграм ограничение 4096 символов
+def chunk_text(text, limit=4096):
+    out = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut == -1:
+            cut = limit
+        out.append(text[:cut])
+        text = text[cut:]
+    if text:
+        out.append(text)
+    return out
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Приветственное сообщение."""
     await update.message.reply_text(
-        "Привет! Отправь одну или несколько ссылок на Instagram Reels, "
-        "а я скачаю их и верну видео и текстовую расшифровку."
+        "Привет! Пришли одну или несколько ссылок на Instagram Reels — "
+        "я скачаю видео и верну транскрипцию в чат.\n"
+        "Можно командой /transcribe <url1> <url2> … или просто текстом со ссылками."
     )
 
-async def process_links(links, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает список ссылок — скачивает, транскрибирует и отправляет."""
-    for idx, url in enumerate(links, 1):
-        await update.message.reply_text(f"({idx}/{len(links)}) Обрабатываю ссылку: {url}")
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                video_path = os.path.join(tmpdir, "video.mp4")
+async def transcribe_url(url: str, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await context.bot.send_message(chat_id, f"Скачиваю: {url}")
+        with tempfile.TemporaryDirectory() as tmp:
+            mp4 = os.path.join(tmp, "video.mp4")
+            wav = os.path.join(tmp, "audio.wav")
 
-                # 1. Скачиваем видео через yt-dlp
-                ydl_opts = {
-                    "format": "mp4",
-                    "outtmpl": video_path,
-                    "quiet": True,
-                }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
+            # 1) скачиваем видео
+            ydl_opts = {"format": "mp4", "outtmpl": mp4, "quiet": True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
 
-                # 2. Извлекаем аудио
-                wav_path = os.path.join(tmpdir, "audio.wav")
-                with VideoFileClip(video_path) as clip:
-                    clip.audio.write_audiofile(wav_path, logger=None)
+            # 2) извлекаем аудио
+            with VideoFileClip(mp4) as clip:
+                if not clip.audio:
+                    raise RuntimeError("В видео нет аудио-дорожки")
+                clip.audio.write_audiofile(wav, logger=None)
 
-                # 3. Отправляем аудио на распознавание в Whisper (OpenAI)
-                with open(wav_path, "rb") as audio_file:
-                    transcript_text = openai.Audio.transcribe(
-                        model="whisper-1",
-                        file=audio_file,
-                        response_format="text"
-                    )
-
-                # 4. Отправляем оригинальное видео пользователю
-                await context.bot.send_video(
-                    chat_id=update.effective_chat.id,
-                    video=InputFile(video_path),
-                    caption=f"Ролик по ссылке {url}"
+            # 3) транскрипция (OpenAI Whisper)
+            await context.bot.send_message(chat_id, "Распознаю речь…")
+            with open(wav, "rb") as f:
+                txt = openai.Audio.transcribe(
+                    model="whisper-1",
+                    file=f,
+                    response_format="text"
                 )
 
-                # 5. Отправляем транскрипцию
-                await update.message.reply_text(f"Текст:\n{transcript_text.strip()}")
+            # 4) отправляем видео и текст
+            try:
+                await context.bot.send_video(chat_id, InputFile(mp4), caption="Видео")
+            except Exception as e:
+                await context.bot.send_message(chat_id, f"⚠️ Не удалось отправить видео ({e}).")
 
-        except Exception as e:
-            await update.message.reply_text(f"Ошибка при обработке {url}: {e}")
+            text = txt.strip()
+            if not text:
+                text = "(пустая транскрипция)"
 
-async def transcribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /transcribe с поддержкой нескольких ссылок."""
+            for part in chunk_text(f"Транскрипция:\n{text}"):
+                await context.bot.send_message(chat_id, part)
+
+    except Exception as e:
+        await context.bot.send_message(chat_id, f"❌ Ошибка при обработке {url}: {e}")
+
+async def transcribe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Пожалуйста, укажите хотя бы один URL после /transcribe.")
+        await update.message.reply_text("Используйте: /transcribe <url1> <url2> …")
         return
-    links = [arg for arg in context.args if REEL_PATTERN.match(arg)]
+    links = [u for u in context.args if REEL_PATTERN.match(u)]
     if not links:
-        await update.message.reply_text("Не найдено валидных ссылок на Reels.")
+        await update.message.reply_text("Не нашёл валидные ссылки вида https://www.instagram.com/reel/…")
         return
-    await process_links(links, update, context)
+    for i, link in enumerate(links, 1):
+        await update.message.reply_text(f"({i}/{len(links)}) В работу: {link}")
+        await transcribe_url(link, update.effective_chat.id, context)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик обычных сообщений — ищет ссылки."""
-    text = update.message.text or ""
-    links = REEL_PATTERN.findall(text)
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt = update.message.text or ""
+    links = REEL_PATTERN.findall(txt)
     if not links:
-        await update.message.reply_text("Пришлите ссылку на Reel, и я скачиваю и расшифрую.")
+        await update.message.reply_text("Пришлите ссылку(и) на Reels.")
         return
-    await process_links(links, update, context)
+    for i, link in enumerate(links, 1):
+        await update.message.reply_text(f"({i}/{len(links)}) В работу: {link}")
+        await transcribe_url(link, update.effective_chat.id, context)
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    # Команда start
     app.add_handler(CommandHandler("start", start))
-    # Команда /transcribe
-    app.add_handler(CommandHandler("transcribe", transcribe_command))
-    # Сообщения с URL-ами
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    app.add_handler(CommandHandler("transcribe", transcribe_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     app.run_polling()
 
 if __name__ == "__main__":
